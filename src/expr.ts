@@ -20,7 +20,7 @@ export class ExprError extends Error {}
 
 export type Env = Map<string, number>;
 
-export const CONSTANTS: Record<string, number> = { pi: Math.PI, e: Math.E, tau: Math.PI * 2 };
+export const CONSTANTS: Record<string, number> = { pi: Math.PI, e: Math.E, tau: Math.PI * 2, inf: Infinity };
 
 // --- Parser (Pratt over script tokens) ----------------------------------------
 
@@ -237,7 +237,7 @@ export function evalTuple(node: ExprNode, env: Env): number[] {
 }
 
 function callFn(name: string, args: number[]): number {
-  if (name === "random" || name === "rand") return randArgs(args, 0n);
+  if (name === "random" || name === "rand" || name === "rand2") return randArgs(args, 0n);
   if (name === "noise") {
     if (args.length === 1) return noise1(args[0], 0n);
     if (args.length === 2) return noise2(args[0], args[1], 0n);
@@ -246,6 +246,28 @@ function callFn(name: string, args: number[]): number {
   if ((name === "min" || name === "max") && args.length === 2) {
     return name === "min" ? Math.min(args[0], args[1]) : Math.max(args[0], args[1]);
   }
+  if ((name === "hypot" || name === "length" || name === "distance") && args.length === 2) return Math.hypot(args[0], args[1]);
+  if (name === "atan2" && args.length === 2) return Math.atan2(args[0], args[1]);
+  if (name === "mod" && args.length === 2) return args[1] === 0 ? Number.NaN : ((args[0] % args[1]) + args[1]) % args[1];
+  if (name === "step" && args.length === 2) return args[1] < args[0] ? 0 : 1;
+  if (name === "mix" && args.length === 3) return args[0] + (args[1] - args[0]) * args[2];
+  if (name === "clamp" && args.length === 3) return Math.max(args[1], Math.min(args[2], args[0]));
+  if ((name === "smoothstep" || name === "smootherstep") && args.length === 3) {
+    const span = args[1] - args[0];
+    const t = span === 0 ? (args[2] < args[0] ? 0 : 1) : Math.max(0, Math.min(1, (args[2] - args[0]) / span));
+    return name === "smoothstep" ? t * t * (3 - 2 * t) : t * t * t * (t * (t * 6 - 15) + 10);
+  }
+  if (name === "map" && (args.length === 3 || args.length === 5)) {
+    const t = (args[0] - args[1]) / (args[2] - args[1]);
+    return args.length === 3 ? t : args[3] + (args[4] - args[3]) * t;
+  }
+  if (name === "within" && args.length === 3) return args[0] >= args[1] && args[0] <= args[2] ? 1 : 0;
+  if (name === "select" && args.length === 3) return args[2] > .5 ? args[0] : args[1];
+  if (name === "gaussian" && args.length === 2) return Math.exp(-(args[0] * args[0]) / Math.max(1e-9, 2 * args[1] * args[1]));
+  if (name === "parabola" && args.length === 2) return Math.pow(Math.max(0, 4 * args[0] * (1 - args[0])), args[1]);
+  if (name === "decimate" && args.length === 2) return args[1] === 0 ? args[0] : Math.floor(args[0] * args[1]) / args[1];
+  if (name === "pulse" && args.length === 2) return (((args[0] % 1) + 1) % 1) < args[1] ? 1 : 0;
+  if (name === "pow" && args.length === 2) return Math.pow(args[0], args[1]);
   if (args.length !== 1) throw new ExprError(`\`${name}\` takes 1 argument`);
   const x = args[0];
   switch (name) {
@@ -268,6 +290,21 @@ function callFn(name: string, args: number[]): number {
     case "ceil": return Math.ceil(x);
     case "round": return Math.round(x);
     case "sign": return Math.sign(x) || (Object.is(x, -0) || x === 0 ? (Object.is(x, -0) ? -0 : 0) : x);
+    case "fract": return x - Math.floor(x);
+    case "saturate": return Math.max(0, Math.min(1, x));
+    case "quintic": return x * x * x * (x * (x * 6 - 15) + 10);
+    case "cubic": return x * x * (3 - 2 * x);
+    case "mirror": return Math.abs((((x % 2) + 2) % 2) - 1);
+    case "tri": return 1 - Math.abs((((x % 1) + 1) % 1) * 2 - 1);
+    case "backout": { const c = 1.70158, y = x - 1; return 1 + (c + 1) * y * y * y + c * y * y; }
+    case "bounceout": {
+      const n = 7.5625, d = 2.75;
+      if (x < 1 / d) return n * x * x;
+      if (x < 2 / d) { const y = x - 1.5 / d; return n * y * y + .75; }
+      if (x < 2.5 / d) { const y = x - 2.25 / d; return n * y * y + .9375; }
+      const y = x - 2.625 / d; return n * y * y + .984375;
+    }
+    case "elasticout": return x === 0 || x === 1 ? x : Math.pow(2, -10 * x) * Math.sin((x * 10 - .75) * (2 * Math.PI / 3)) + 1;
     case "sinc": return x === 0 ? 1 : Math.sin(x) / x;
     default: throw new ExprError(`unknown function \`${name}\``);
   }

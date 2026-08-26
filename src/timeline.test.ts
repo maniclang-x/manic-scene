@@ -58,6 +58,25 @@ describe("timeline", () => {
     expect(compiled.sample(2).get("l")!.scale).toBeCloseTo(1, 5);
   });
 
+  it("honors inspector easing for draw, fade, and flash previews", () => {
+    const line = { ...createEntity("line", "l", 100, 100), untraced: true };
+    const circle = createEntity("circle", "c", 200, 100);
+    const compiled = compileScene(docWith({
+      entities: [line, circle],
+      steps: [{
+        name: "effects", mode: "together", gap: 0.1, actions: [
+          { ...createAction("draw", "l"), dur: 1, ease: "linear" },
+          { ...createAction("fade", "c"), dur: 1, ease: "linear" },
+          { ...createAction("flash", "c"), color: "gold", dur: 1, ease: "linear" },
+        ],
+      }],
+    }));
+    const frame = compiled.sample(0.125);
+    expect(frame.get("l")!.draw).toBeCloseTo(0.125, 5);
+    expect(frame.get("c")!.opacity).toBeCloseTo(0.875, 5);
+    expect(frame.get("c")!.flash?.amount).toBeCloseTo(0.5, 5);
+  });
+
   it("keeps a never-shown hidden entity invisible", () => {
     const a = { ...createEntity("text", "a", 100, 100), reveal: "fade" as const };
     const compiled = compileScene(docWith({ entities: [a], steps: [] }));

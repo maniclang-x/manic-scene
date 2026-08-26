@@ -4,33 +4,42 @@
 // real thing (▶ Preview with Manic). Verb inputs render from each verb
 // definition's declared UI — onboarding a new verb never edits this file.
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
-  EASINGS, allVerbDefs, verbDef,
-  type SceneAction, type SceneDoc, type SceneEntity, type StepMode,
+  EASINGS, beatTargetOptions, canSwapStepAction, defFor, entriesForSurface, reconcileVoicePairing, removeStepAction, stepActionAt, stepActions, swapStepAction, threePointReferences, timedPhaseUsage, verbDef, verbPropertyOptionsForTarget, vocabularyAvailability,
+  type ConditionalMeta, type SceneAction, type SceneDoc, type SceneEntity, type SceneStep, type StepMode, type TimingEntity, type VocabularyEntry, type VoiceService, type VoiceTone,
 } from "../index.js";
 import { ColorField } from "./ColorField.js";
 import { LatexField } from "./LatexField.js";
+import { VocabularyBrowser } from "./VocabularyBrowser.js";
 
 interface StoryProps {
   doc: SceneDoc;
+  conditionals: readonly ConditionalMeta[];
   selectedAction: { step: number; index: number } | null;
   selectedEntity: SceneEntity | null;
   warnings: string[];
   onSelectAction(next: { step: number; index: number } | null): void;
-  onAddAction(stepIndex: number, verb: string): void;
+  onAddAction(stepIndex: number, verb: string, timedAt?: { phase: number; segment: number }): void;
+  onAddTimeline(verb: string): void;
+  onAddTimed(controllerId?: string): void;
   onMutate(change: (draft: SceneDoc) => void): void;
   onPreview?(): void;
 }
 
-export function Story({ doc, selectedAction, selectedEntity, warnings, onSelectAction, onAddAction, onMutate, onPreview }: StoryProps) {
-  const [verbMenuFor, setVerbMenuFor] = useState<number | null>(null);
-  const activeAction = selectedAction ? doc.steps[selectedAction.step]?.actions[selectedAction.index] ?? null : null;
+export function Story({ doc, conditionals, selectedAction, selectedEntity, warnings, onSelectAction, onAddAction, onAddTimeline, onAddTimed, onMutate, onPreview }: StoryProps) {
+  const [verbMenuFor, setVerbMenuFor] = useState<{ step: number; phase?: number; segment?: number; left: number; top: number } | null>(null);
+  const [timelineMenu, setTimelineMenu] = useState<{ left: number; top: number } | null>(null);
+  const verbEntries = useMemo(() => entriesForSurface("animate"), []);
+  const timelineEntries = useMemo(() => verbEntries.filter((entry) => verbDef(entry.name)?.placement === "timeline"), [verbEntries]);
+  const beatEntries = useMemo(() => verbEntries.filter((entry) => verbDef(entry.name)?.placement !== "timeline"), [verbEntries]);
+  const activeAction = selectedAction ? stepActionAt(doc.steps[selectedAction.step], selectedAction.index) : null;
+  const activeTarget = activeAction?.target ? doc.entities.find((entity) => entity.id === activeAction.target) ?? null : null;
 
   function mutateAction(change: (action: SceneAction) => void) {
     if (!selectedAction) return;
     onMutate((draft) => {
-      const action = draft.steps[selectedAction.step]?.actions[selectedAction.index];
+      const action = stepActionAt(draft.steps[selectedAction.step], selectedAction.index);
       if (action) change(action);
     });
   }
@@ -40,40 +49,79 @@ export function Story({ doc, selectedAction, selectedEntity, warnings, onSelectA
       <div className="mse-story-head">
         <span className="mse-eyebrow">STORY</span>
         <span className="mse-story-hint">Steps play in order. To watch it, run the real engine — the canvas never approximates playback.</span>
+        {timelineEntries.length > 0 && <button className="mse-story-secondary" onClick={(event) => {
+          if (timelineMenu) { setTimelineMenu(null); return; }
+          const rect = event.currentTarget.getBoundingClientRect();
+          const width = 430, height = 360;
+          setTimelineMenu({ left: Math.max(8, Math.min(rect.left, window.innerWidth - width - 8)), top: Math.max(8, Math.min(rect.bottom + 6, window.innerHeight - height - 8)) });
+        }}>＋ Timeline</button>}
         {onPreview && <button className="mse-primary" onClick={onPreview}>▶ Preview with Manic</button>}
       </div>
+
+      {timelineMenu && (
+        <VocabularyBrowser
+          title="Add Timeline Event"
+          eyebrow="STORY · TOP LEVEL"
+          hint="These native events stay standalone and are never nested inside a step."
+          entries={timelineEntries}
+          availability={() => ({ enabled: true, reason: "" })}
+          onChoose={(entry) => { setTimelineMenu(null); onAddTimeline(entry.name); }}
+          onClose={() => setTimelineMenu(null)}
+          variant="popover"
+          style={{ left: timelineMenu.left, top: timelineMenu.top }}
+          placeholder="Search sections and timeline markers…"
+        />
+      )}
 
       <div className="mse-steps">
         {doc.steps.map((step, stepIndex) => step.origin ? (
           <div className="mse-step mse-step-locked" key={stepIndex} title={step.origin === "generated" ? "Generated by a loop/macro — edit in Source" : "Uses variables — edit in Source"}>
-            <div className="mse-step-head"><span className="mse-step-locked-name">{step.name} 🔒</span></div>
+            <div className="mse-step-head"><span className="mse-step-locked-name">{step.name} 🔒</span><StepConditionalBadges stepIndex={stepIndex} conditionals={conditionals} /></div>
             <div className="mse-step-actions">
-              {step.actions.slice(0, 6).map((action, actionIndex) => (
+              {lockedActionPreview(stepActions(step)).map((action, actionIndex) => (
                 <span key={actionIndex} className="mse-action-chip">
                   <strong>{verbDef(action.verb)?.label.toLowerCase() ?? action.verb}</strong>
-                  {action.target && <span>{action.target}</span>}
+                  {actionTargetLabel(action) && <span>{actionTargetLabel(action)}</span>}
                 </span>
               ))}
-              {step.actions.length > 6 && <span className="mse-action-chip"><small>+{step.actions.length - 6} more</small></span>}
+              {stepActions(step).length > 8 && <span className="mse-action-chip"><small>+{stepActions(step).length - 8} between</small></span>}
             </div>
           </div>
+        ) : step.timed ? (
+          <TimedStepCard
+            key={stepIndex}
+            doc={doc}
+            step={step}
+            stepIndex={stepIndex}
+            selectedAction={selectedAction}
+            selectedEntity={selectedEntity}
+            beatEntries={beatEntries}
+            menu={verbMenuFor}
+            conditionals={conditionals}
+            setMenu={setVerbMenuFor}
+            onSelectAction={onSelectAction}
+            onAddAction={onAddAction}
+            onMutate={onMutate}
+          />
         ) : (
           <div className="mse-step" key={stepIndex}>
             <div className="mse-step-head">
               <input
                 value={step.name}
+                disabled={step.actions.some((action) => verbDef(action.verb)?.placement === "timeline")}
                 onChange={(event) => onMutate((draft) => { draft.steps[stepIndex].name = event.target.value; })}
                 aria-label="Step name"
                 spellCheck={false}
               />
+              <StepConditionalBadges stepIndex={stepIndex} conditionals={conditionals} />
               <div className="mse-step-tools">
                 <button disabled={stepIndex === 0} title="Move step earlier" onClick={() => onMutate((draft) => { const steps = draft.steps; [steps[stepIndex - 1], steps[stepIndex]] = [steps[stepIndex], steps[stepIndex - 1]]; })}>◀</button>
                 <button disabled={stepIndex >= doc.steps.length - 1} title="Move step later" onClick={() => onMutate((draft) => { const steps = draft.steps; [steps[stepIndex + 1], steps[stepIndex]] = [steps[stepIndex], steps[stepIndex + 1]]; })}>▶</button>
-                <button title="Remove step" onClick={() => { onSelectAction(null); onMutate((draft) => { draft.steps.splice(stepIndex, 1); }); }}>×</button>
+                <button title="Remove step" onClick={() => { onSelectAction(null); onMutate((draft) => { draft.steps.splice(stepIndex, 1); reconcileVoicePairing(draft); }); }}>×</button>
               </div>
             </div>
             <div className="mse-step-mode">
-              <select value={step.mode} onChange={(event) => onMutate((draft) => { draft.steps[stepIndex].mode = event.target.value as StepMode; })} aria-label="Step timing">
+              <select disabled={step.actions.some((action) => verbDef(action.verb)?.placement === "timeline")} value={step.mode} onChange={(event) => onMutate((draft) => { draft.steps[stepIndex].mode = event.target.value as StepMode; })} aria-label="Step timing">
                 <option value="together">together</option>
                 <option value="sequence">one after another</option>
                 <option value="stagger">staggered</option>
@@ -96,26 +144,33 @@ export function Story({ doc, selectedAction, selectedEntity, warnings, onSelectA
                     onClick={() => onSelectAction(active ? null : { step: stepIndex, index: actionIndex })}
                   >
                     <strong>{verbDef(action.verb)?.label.toLowerCase() ?? action.verb}</strong>
-                    {action.target && <span>{action.target}</span>}
-                    <small>{action.dur}s</small>
+                    {actionTargetLabel(action) && <span>{actionTargetLabel(action)}</span>}
+                    <small>{(verbDef(action.verb)?.beatDur(action, doc.entities.find((entity) => entity.id === action.target) ?? null, doc) ?? action.dur).toFixed(2).replace(/\.00$/u, "")}s</small>
                   </button>
                 );
               })}
               <div className="mse-add-action">
-                <button onClick={() => setVerbMenuFor((current) => (current === stepIndex ? null : stepIndex))}>+ Beat</button>
-                {verbMenuFor === stepIndex && (
-                  <div className="mse-verb-menu">
-                    {allVerbDefs().map((verb) => {
-                      const enabled = verb.targetless || (selectedEntity ? verb.appliesTo(selectedEntity.kind) : false);
-                      return (
-                        <button key={verb.name} disabled={!enabled} title={verb.hint} onClick={() => { setVerbMenuFor(null); onAddAction(stepIndex, verb.name); }}>
-                          <strong>{verb.label}</strong>
-                          <small>{verb.hint}</small>
-                        </button>
-                      );
-                    })}
-                    {!selectedEntity && <p>Select an entity on the canvas to add beats for it. Wait is always available.</p>}
-                  </div>
+                <button disabled={step.actions.some((action) => verbDef(action.verb)?.placement === "timeline")} title={step.actions.some((action) => verbDef(action.verb)?.placement === "timeline") ? "Timeline events stay standalone in native Manic." : undefined} onClick={(event) => {
+                  if (verbMenuFor?.step === stepIndex && verbMenuFor.phase === undefined) { setVerbMenuFor(null); return; }
+                  const rect = event.currentTarget.getBoundingClientRect();
+                  const height = 440;
+                  const top = rect.top >= height + 8 ? rect.top - height - 6 : Math.min(window.innerHeight - height - 8, rect.bottom + 6);
+                  const left = Math.max(8, Math.min(rect.left, window.innerWidth - 438));
+                  setVerbMenuFor({ step: stepIndex, left, top: Math.max(8, top) });
+                }}>+ Beat</button>
+                {verbMenuFor?.step === stepIndex && verbMenuFor.phase === undefined && (
+                  <VocabularyBrowser
+                    title="Add a Beat"
+                    eyebrow={`STORY · ${step.name}`}
+                    hint={selectedEntity ? `Compatible actions for ${selectedEntity.id} appear first.` : "Select an entity for targeted actions; scene actions remain available."}
+                    entries={beatEntries}
+                    availability={(entry) => vocabularyAvailability(entry, doc, selectedEntity?.id ?? "")}
+                    onChoose={(entry) => { setVerbMenuFor(null); onAddAction(stepIndex, entry.name); }}
+                    onClose={() => setVerbMenuFor(null)}
+                    variant="popover"
+                    style={{ left: verbMenuFor.left, top: verbMenuFor.top }}
+                    placeholder="Search animation, timing, camera, or emphasis…"
+                  />
                 )}
               </div>
             </div>
@@ -123,56 +178,281 @@ export function Story({ doc, selectedAction, selectedEntity, warnings, onSelectA
         ))}
         <button
           className="mse-add-step"
-          onClick={() => onMutate((draft) => draft.steps.push({ name: `Step ${draft.steps.length + 1}`, mode: "together", gap: 0.15, actions: [] }))}
+          onClick={() => onMutate((draft) => draft.steps.push({ name: `Step ${draft.steps.length + 1}`, mode: "together", gap: 0.12, actions: [] }))}
         >
           + Step
+        </button>
+        <button
+          className="mse-add-step"
+          disabled={!doc.entities.some((entity) => entity.kind === "timing")}
+          title={doc.entities.some((entity) => entity.kind === "timing") ? "Schedule Story beats against named timing phases" : "Add a generic Timing controller first"}
+          onClick={() => onAddTimed(selectedEntity?.kind === "timing" ? selectedEntity.id : undefined)}
+        >
+          + Timed phases
         </button>
       </div>
 
       {activeAction && selectedAction && (() => {
         const spec = verbDef(activeAction.verb);
         if (!spec) return null;
+        const propOptions = verbPropertyOptionsForTarget(doc, activeAction.verb, activeAction.target);
+        const targetOptions = beatTargetOptions(doc, activeAction.verb);
+        const groupTags = spec.ui.targetTags
+          ? [...new Set(doc.entities.filter((entity) => spec.appliesTo(entity.kind)).flatMap((entity) => entity.tags ?? []))]
+          : [];
+        const pointEntityRef = spec.ui.pointOrEntityRef === "refs0" ? activeAction.refs?.[0] ?? null : activeAction.ref;
         return (
           <div className="mse-action-editor">
             <strong>{spec.label}</strong>
             {!spec.targetless && (
               <label>
-                <span>Target</span>
+                <span>{spec.ui.targetLabel ?? "Target"}</span>
                 <select
                   value={activeAction.target}
-                  onChange={(event) => mutateAction((action) => { action.target = event.target.value; })}
+                  onChange={(event) => mutateAction((action) => {
+                    action.target = event.target.value;
+                    const options = verbPropertyOptionsForTarget(doc, action.verb, action.target);
+                    if (options.length > 0 && (!action.prop || !options.includes(action.prop))) action.prop = options[0];
+                    const entity = doc.entities.find((candidate) => candidate.id === action.target);
+                    if (entity) {
+                      if (spec.ui.numbers) {
+                        const visible = spec.ui.numbers.filter((field) => !field.visibleWhenKinds || field.visibleWhenKinds.includes(entity.kind));
+                        action.values = visible.length ? visible.map((field, index) => action.values?.[index] ?? field.initial ?? 0) : undefined;
+                      }
+                      if (action.verb === "run") {
+                        action.durationExplicit = false;
+                        action.dur = spec.beatDur(action, entity, doc);
+                      }
+                      if (spec.ui.numberList?.countFromTarget) {
+                        const raw = Reflect.get(entity, spec.ui.numberList.countFromTarget);
+                        if (typeof raw === "number") action.values = Array.from({ length: Math.max(1, Math.round(raw)) }, (_unused, index) => action.values?.[index] ?? 0);
+                      }
+                      if (spec.ui.numberLists) action.valueLists = spec.ui.numberLists.map((list, listIndex) => {
+                        const raw = list.countFromTarget ? Reflect.get(entity, list.countFromTarget) : action.valueLists?.[listIndex]?.length;
+                        const count = Math.max(1, Math.round(typeof raw === "number" ? raw : 1));
+                        return Array.from({ length: count }, (_unused, index) => action.valueLists?.[listIndex]?.[index] ?? list.initial ?? 0);
+                      });
+                    }
+                  })}
                 >
-                  {doc.entities.filter((entity) => spec.appliesTo(entity.kind)).map((entity) => (
-                    <option key={entity.id} value={entity.id}>{entity.id}</option>
+                  {spec.ui.targetNone && <option value="none">none — release camera</option>}
+                  {groupTags.length > 0 && <optgroup label="Tagged groups">
+                    {groupTags.map((tag) => <option key={`tag-${tag}`} value={tag}>{tag} — tagged group</option>)}
+                  </optgroup>}
+                  <optgroup label={groupTags.length > 0 ? "Entities" : "Targets"}>
+                  {targetOptions.filter((option) => option.id !== activeAction.ref && !(activeAction.refs ?? []).includes(option.id)).map((option) => (
+                    <option key={option.id} value={option.id}>{option.label}</option>
                   ))}
+                  </optgroup>
                 </select>
               </label>
             )}
-            {spec.ui.propOptions && (
+            {spec.ui.optionalTarget && (
+              <label>
+                <span>{spec.ui.optionalTarget.label}</span>
+                <select value={activeAction.target} onChange={(event) => mutateAction((action) => { action.target = event.target.value; })}>
+                  <option value="">{spec.ui.optionalTarget.noneLabel}</option>
+                  {doc.entities.filter((entity) => spec.ui.optionalTarget!.kinds.includes(entity.kind)).map((entity) => (
+                    <option key={entity.id} value={entity.id}>{entity.id}</option>
+                  ))}
+                </select>
+                <small>Optional: Manic updates this caption while narration plays.</small>
+              </label>
+            )}
+            {propOptions.length > 0 && (
               <label>
                 <span>Property</span>
-                <select value={activeAction.prop ?? spec.ui.propOptions[0]} onChange={(event) => mutateAction((action) => { action.prop = event.target.value; })}>
-                  {spec.ui.propOptions.map((prop) => <option key={prop} value={prop}>{prop}</option>)}
+                <select value={activeAction.prop ?? propOptions[0]} onChange={(event) => mutateAction((action) => { action.prop = event.target.value; })}>
+                  {propOptions.map((prop) => <option key={prop} value={prop}>{prop}</option>)}
                 </select>
               </label>
             )}
             {spec.ui.point && (
               <>
                 <label>
-                  <span>{spec.ui.point === "delta" ? "Δx" : "x"}</span>
+                  <span>{spec.ui.pointLabel ? `${spec.ui.pointLabel} x` : spec.ui.point === "delta" ? "Δx" : "x"}</span>
                   <input type="number" value={activeAction.point?.x ?? 0} onChange={(event) => mutateAction((action) => { action.point = { x: Number(event.target.value) || 0, y: action.point?.y ?? 0 }; })} />
                 </label>
                 <label>
-                  <span>{spec.ui.point === "delta" ? "Δy" : "y"}</span>
+                  <span>{spec.ui.pointLabel ? `${spec.ui.pointLabel} y` : spec.ui.point === "delta" ? "Δy" : "y"}</span>
                   <input type="number" value={activeAction.point?.y ?? 0} onChange={(event) => mutateAction((action) => { action.point = { x: action.point?.x ?? 0, y: Number(event.target.value) || 0 }; })} />
                 </label>
               </>
             )}
+            {spec.ui.pointOrEntity && (
+              <div className="mse-action-entities">
+                <span>{spec.ui.pointOrEntity.label}</span>
+                <label>
+                  <span>Reference</span>
+                  <select value={pointEntityRef ?? ""} onChange={(event) => mutateAction((action) => {
+                    const value = event.target.value || null;
+                    if (spec.ui.pointOrEntityRef === "refs0") action.refs = value ? [value] : [];
+                    else action.ref = value;
+                    if (!value && !action.point) action.point = { x: 0, y: 0 };
+                  })}>
+                    <option value="">Point coordinates</option>
+                    {doc.entities.filter((entity) => entity.id !== activeAction.target && entity.id !== activeAction.ref && spec.appliesTo(entity.kind)).map((entity) => <option key={entity.id} value={entity.id}>{entity.id}</option>)}
+                  </select>
+                </label>
+                {!pointEntityRef && <>
+                  <label><span>x</span><input type="number" value={activeAction.point?.x ?? 0} onChange={(event) => mutateAction((action) => { action.point = { x: Number(event.target.value) || 0, y: action.point?.y ?? 0 }; })} /></label>
+                  <label><span>y</span><input type="number" value={activeAction.point?.y ?? 0} onChange={(event) => mutateAction((action) => { action.point = { x: action.point?.x ?? 0, y: Number(event.target.value) || 0 }; })} /></label>
+                </>}
+              </div>
+            )}
+            {spec.ui.point3OrEntity && (() => {
+              const offset = spec.ui.point3OrEntity.offset ?? 0;
+              const candidates = doc.entities.filter((entity) => entity.id !== activeAction.target && (!spec.ui.point3OrEntity?.accept || spec.ui.point3OrEntity.accept(entity.kind)));
+              const children = spec.ui.point3OrEntity.includeChildren
+                ? doc.entities.flatMap((owner) => defFor(owner).storyTargets?.(owner) ?? []).filter((child) => child.id !== activeAction.target && threePointReferences(doc).includes(child.id) && (!spec.ui.point3OrEntity?.accept || spec.ui.point3OrEntity.accept(child.kind)))
+                : [];
+              return <div className="mse-action-entities">
+                <span>{spec.ui.point3OrEntity.label}</span>
+                <label>
+                  <span>Reference</span>
+                  <select value={activeAction.ref ?? ""} onChange={(event) => mutateAction((action) => { action.ref = event.target.value || null; })}>
+                    <option value="">World coordinates</option>
+                    {children.length > 0 && <optgroup label="Addressable children">{children.map((child) => <option key={child.id} value={child.id}>{child.label}</option>)}</optgroup>}
+                    <optgroup label="Entities">{candidates.map((entity) => <option key={entity.id} value={entity.id}>{entity.id}</option>)}</optgroup>
+                  </select>
+                </label>
+                {!activeAction.ref && ["X", "Y", "Z"].map((axis, index) => <label key={axis}>
+                  <span>{axis}</span>
+                  <input type="number" step={.1} value={activeAction.values?.[offset + index] ?? 0} onChange={(event) => mutateAction((action) => { const values = [...(action.values ?? [])]; values[offset + index] = Number(event.target.value) || 0; action.values = values; })} />
+                </label>)}
+              </div>;
+            })()}
+            {spec.ui.point3 && (!spec.ui.point3.visibleWhen || activeAction[spec.ui.point3.visibleWhen.field] === spec.ui.point3.visibleWhen.equals) && (() => {
+              const offset = spec.ui.point3.offset ?? 0;
+              return <div className="mse-action-entities">
+                <span>{spec.ui.point3.label}</span>
+                {["X", "Y", "Z"].map((axis, index) => <label key={axis}>
+                  <span>{axis}</span>
+                  <input type="number" step={.1} value={activeAction.values?.[offset + index] ?? 0} onChange={(event) => mutateAction((action) => { const values = [...(action.values ?? [])]; values[offset + index] = Number(event.target.value) || 0; action.values = values; })} />
+                </label>)}
+              </div>;
+            })()}
             {spec.ui.amount && (
               <label>
                 <span>{spec.ui.amount.label}</span>
-                <input type="number" step={spec.ui.amount.step} value={activeAction.amount ?? 0} onChange={(event) => mutateAction((action) => { action.amount = Number(event.target.value) || 0; })} />
+                <input type="number" min={spec.ui.amount.min} max={typeof spec.ui.amount.max === "function" ? spec.ui.amount.max(doc.entities.find((entity) => entity.id === activeAction.target) ?? null, doc, activeAction) : spec.ui.amount.max} step={spec.ui.amount.step} value={activeAction.amount ?? 0} onChange={(event) => mutateAction((action) => {
+                  const value = Number(event.target.value) || 0;
+                  const target = doc.entities.find((entity) => entity.id === action.target) ?? null;
+                  const max = typeof spec.ui.amount?.max === "function" ? spec.ui.amount.max(target, doc, action) : spec.ui.amount?.max;
+                  action.amount = Math.max(spec.ui.amount?.min ?? -Infinity, Math.min(max ?? Infinity, value));
+                  action.amountExplicit = true;
+                })} />
               </label>
+            )}
+            {spec.ui.numbers?.filter((field) => !field.visibleWhenKinds || field.visibleWhenKinds.includes(doc.entities.find((entity) => entity.id === activeAction.target)?.kind ?? "")).map((field, index) => (
+              <label key={`${field.label}-${index}`}>
+                <span>{field.label}</span>
+                <input type="number" min={field.min} max={typeof field.max === "function" ? field.max(doc.entities.find((entity) => entity.id === activeAction.target) ?? null, doc, activeAction) : field.max} step={field.step} value={activeAction.values?.[index] ?? 0} onChange={(event) => mutateAction((action) => {
+                  const values = [...(action.values ?? [])];
+                  const target = doc.entities.find((entity) => entity.id === action.target) ?? null;
+                  const max = typeof field.max === "function" ? field.max(target, doc, action) : field.max;
+                  values[index] = Math.max(field.min ?? -Infinity, Math.min(max ?? Infinity, Number(event.target.value) || 0));
+                  action.values = values;
+                })} />
+              </label>
+            ))}
+            {spec.ui.numberList && (() => {
+              const target = doc.entities.find((entity) => entity.id === activeAction.target);
+              const rawCount = target && spec.ui.numberList?.countFromTarget ? Reflect.get(target, spec.ui.numberList.countFromTarget) : activeAction.values?.length;
+              const count = Math.max(1, Math.round(typeof rawCount === "number" ? rawCount : 1));
+              const values = Array.from({ length: count }, (_unused, index) => activeAction.values?.[index] ?? 0);
+              return <div className="mse-action-entities mse-action-number-list">
+                <span>{spec.ui.numberList.label}</span>
+                <div className="mse-action-number-grid">
+                  {values.map((value, index) => <label key={index}>
+                    <span>x{index + 1}</span>
+                    <input type="number" min={spec.ui.numberList?.min} max={spec.ui.numberList?.max} step={spec.ui.numberList?.step} value={value} onChange={(event) => mutateAction((action) => {
+                      const next = Array.from({ length: count }, (_item, at) => action.values?.[at] ?? 0);
+                      const parsed = Number(event.target.value) || 0;
+                      next[index] = Math.max(spec.ui.numberList?.min ?? -Infinity, Math.min(spec.ui.numberList?.max ?? Infinity, parsed));
+                      action.values = next;
+                    })} />
+                  </label>)}
+                </div>
+                <small>One value per dial. Manic clamps each coordinate to −1…1.</small>
+              </div>;
+            })()}
+            {spec.ui.numberLists?.map((list, listIndex) => {
+              const target = doc.entities.find((entity) => entity.id === activeAction.target);
+              const rawCount = target && list.countFromTarget ? Reflect.get(target, list.countFromTarget) : activeAction.valueLists?.[listIndex]?.length;
+              const count = Math.max(1, Math.round(typeof rawCount === "number" ? rawCount : 1));
+              const values = Array.from({ length: count }, (_unused, index) => activeAction.valueLists?.[listIndex]?.[index] ?? list.initial ?? 0);
+              return <div className="mse-action-entities mse-action-number-list" key={`${list.label}-${listIndex}`}>
+                <span>{list.label}</span>
+                <div className="mse-action-number-grid">
+                  {values.map((value, index) => <label key={index}>
+                    <span>{index + 1}</span>
+                    <input type="number" min={list.min} max={list.max} step={list.step} value={value} onChange={(event) => mutateAction((action) => {
+                      const groups = (action.valueLists ?? []).map((group) => [...group]);
+                      while (groups.length <= listIndex) groups.push([]);
+                      const next = Array.from({ length: count }, (_item, at) => groups[listIndex]?.[at] ?? list.initial ?? 0);
+                      const parsed = Number(event.target.value) || 0;
+                      next[index] = Math.max(list.min ?? -Infinity, Math.min(list.max ?? Infinity, parsed));
+                      groups[listIndex] = next;
+                      action.valueLists = groups;
+                    })} />
+                  </label>)}
+                </div>
+                <small>One value per stable collection child.</small>
+              </div>;
+            })}
+            {spec.ui.entityArg && (
+              <label>
+                <span>{spec.ui.entityArg.label}</span>
+                <select value={activeAction.ref ?? ""} onChange={(event) => mutateAction((action) => { action.ref = event.target.value; spec.completeAction?.(action, doc); })}>
+                  {spec.ui.entityArg.allowNone && <option value="none">none — release</option>}
+                  {spec.ui.entityArg.allowTags && <optgroup label="Tagged groups">
+                    {[...new Set(doc.entities.flatMap((entity) => entity.tags ?? []))].map((tag) => <option key={`tag-${tag}`} value={tag}>{tag} — tagged group</option>)}
+                  </optgroup>}
+                  {spec.ui.entityArg.includeChildren && <optgroup label="Addressable children">
+                    {doc.entities.flatMap((owner) => defFor(owner).storyTargets?.(owner) ?? []).filter((child) => child.id !== activeAction.target
+                      && (!spec.ui.entityArg?.concreteChildrenOnly || threePointReferences(doc).includes(child.id))
+                      && (!spec.ui.entityArg?.kinds || spec.ui.entityArg.kinds.includes(child.kind))
+                      && (!spec.ui.entityArg?.accept || spec.ui.entityArg.accept(child.kind))).map((child) => <option key={`child-${child.id}`} value={child.id}>{child.label}</option>)}
+                  </optgroup>}
+                  <optgroup label={spec.ui.entityArg.allowTags ? "Entities" : "Targets"}>
+                  {doc.entities.filter((entity) => entity.id !== activeAction.target
+                    && (!spec.ui.entityArg?.kinds || spec.ui.entityArg.kinds.includes(entity.kind))
+                    && (!spec.ui.entityArg?.accept || spec.ui.entityArg.accept(entity.kind))).map((entity) => (
+                    <option key={entity.id} value={entity.id}>{entity.id}</option>
+                  ))}
+                  </optgroup>
+                </select>
+              </label>
+            )}
+            {spec.ui.choices?.map((choice) => {
+              const value = choice.field === "prop" ? activeAction.prop : activeAction.text;
+              const target = doc.entities.find((entity) => entity.id === activeAction.target) ?? null;
+              const options = typeof choice.options === "function" ? choice.options(target) : choice.options;
+              return (
+                <label key={`${choice.field}-${choice.label}`}>
+                  <span>{choice.label}</span>
+                  <select value={value ?? options[0] ?? ""} onChange={(event) => mutateAction((action) => { action[choice.field] = event.target.value; })}>
+                    {options.map((option) => <option key={option} value={option}>{option}</option>)}
+                  </select>
+                </label>
+              );
+            })}
+            {spec.ui.entityList && (
+              <div className="mse-action-entities">
+                <span>{spec.ui.entityList.label}</span>
+                {(activeAction.refs ?? []).map((ref, index) => (
+                  <label key={`${index}-${ref}`}>
+                    <span>Member {index + 2}</span>
+                    <select value={ref} onChange={(event) => mutateAction((action) => { const refs = [...(action.refs ?? [])]; refs[index] = event.target.value; action.refs = refs; })}>
+                      {doc.entities.filter((entity) => entity.id !== activeAction.target && (entity.id === ref || !(activeAction.refs ?? []).includes(entity.id)) && spec.appliesTo(entity.kind)).map((entity) => <option key={entity.id} value={entity.id}>{entity.id}</option>)}
+                    </select>
+                    <button type="button" disabled={(activeAction.refs?.length ?? 0) <= spec.ui.entityList!.min - 1} onClick={() => mutateAction((action) => { action.refs = (action.refs ?? []).filter((_ref, at) => at !== index); })}>×</button>
+                  </label>
+                ))}
+                <button type="button" disabled={!doc.entities.some((entity) => spec.appliesTo(entity.kind) && !new Set([activeAction.target, ...(activeAction.refs ?? [])]).has(entity.id))} onClick={() => mutateAction((action) => { const used = new Set([action.target, ...(action.refs ?? [])]); const next = doc.entities.find((entity) => spec.appliesTo(entity.kind) && !used.has(entity.id)); if (next) action.refs = [...(action.refs ?? []), next.id]; })}>+ Member</button>
+                {(activeAction.refs?.length ?? 0) < spec.ui.entityList.min - 1 && <small>Add at least {spec.ui.entityList.min - 1} more member.</small>}
+              </div>
             )}
             {spec.ui.wordsArg && (
               <div className="mse-action-latex">
@@ -180,12 +460,47 @@ export function Story({ doc, selectedAction, selectedEntity, warnings, onSelectA
                 <textarea
                   className="mse-action-words"
                   value={activeAction.text ?? ""}
-                  onChange={(event) => mutateAction((action) => { action.text = event.target.value; })}
+                  onChange={(event) => mutateAction((action) => {
+                    action.text = event.target.value;
+                    if (spec.ui.autoDurationFromWords) action.dur = spec.beatDur(action, null, doc);
+                  })}
                   rows={2}
                   spellCheck={false}
                 />
               </div>
             )}
+            {spec.ui.wordsArgs?.map((field, index) => (
+              <div className="mse-action-latex" key={`${field.label}-${index}`}>
+                <span>{field.label}</span>
+                <textarea
+                  className="mse-action-words"
+                  value={activeAction.texts?.[index] ?? ""}
+                  onChange={(event) => mutateAction((action) => {
+                    const texts = [...(action.texts ?? [])]; texts[index] = event.target.value; action.texts = texts;
+                  })}
+                  rows={2}
+                  spellCheck={false}
+                />
+                {field.hint && <small>{field.hint}</small>}
+              </div>
+            ))}
+            {spec.ui.formulaArgs?.map((field, index) => (
+              <div className="mse-action-latex" key={`${field.label}-${index}`}>
+                <span>{field.label}</span>
+                <textarea
+                  className="mse-action-words"
+                  value={activeAction.texts?.[index] ?? ""}
+                  onChange={(event) => mutateAction((action) => {
+                    const texts = [...(action.texts ?? [])];
+                    texts[index] = event.target.value;
+                    action.texts = texts;
+                  })}
+                  rows={2}
+                  spellCheck={false}
+                />
+                {field.hint && <small>{field.hint}</small>}
+              </div>
+            ))}
             {spec.ui.latexArg && (
               <div className="mse-action-latex">
                 <span>{spec.ui.latexArg.label}</span>
@@ -203,10 +518,22 @@ export function Story({ doc, selectedAction, selectedEntity, warnings, onSelectA
                 />
               </div>
             )}
-            <label>
-              <span>{spec.ui.durLabel}</span>
-              <input type="number" min={0.05} step={0.05} value={activeAction.dur} onChange={(event) => mutateAction((action) => { action.dur = Math.max(0.05, Number(event.target.value) || 0.05); })} />
-            </label>
+            {spec.ui.voiceConfig && <VoiceControls doc={doc} onMutate={onMutate} />}
+            {!spec.ui.hideDur && activeAction.verb === "run" && activeAction.durationExplicit === false && (
+              <label>
+                <span>Effective seconds</span>
+                <input type="number" value={activeAction.dur} disabled />
+                <small>Derived from the target timing. Native source keeps <code>run({activeAction.target})</code>.</small>
+                <button type="button" className="mse-mini-action" onClick={() => mutateAction((action) => { action.durationExplicit = true; })}>Override duration</button>
+              </label>
+            )}
+            {!spec.ui.hideDur && !(activeAction.verb === "run" && activeAction.durationExplicit === false) && (
+              <label>
+                <span>{spec.ui.durLabel}</span>
+                <input type="number" min={spec.ui.durMin ?? 0.05} step={0.05} value={activeAction.dur} onChange={(event) => mutateAction((action) => { const min = spec.ui.durMin ?? 0.05; action.dur = Math.max(min, Number(event.target.value) || min); action.durationExplicit = true; })} />
+                {activeAction.verb === "run" && activeTarget && <button type="button" className="mse-mini-action" onClick={() => mutateAction((action) => { action.durationExplicit = false; action.dur = spec.beatDur(action, activeTarget, doc); })}>Use target timing</button>}
+              </label>
+            )}
             {spec.hasEase && (
               <label>
                 <span>Easing</span>
@@ -217,21 +544,19 @@ export function Story({ doc, selectedAction, selectedEntity, warnings, onSelectA
             )}
             <div className="mse-action-editor-buttons">
               <button
-                disabled={selectedAction.index === 0}
+                disabled={!canSwapStepAction(doc.steps[selectedAction.step], selectedAction.index, -1)}
                 onClick={() => {
                   onMutate((draft) => {
-                    const actions = draft.steps[selectedAction.step].actions;
-                    [actions[selectedAction.index - 1], actions[selectedAction.index]] = [actions[selectedAction.index], actions[selectedAction.index - 1]];
+                    swapStepAction(draft.steps[selectedAction.step], selectedAction.index, -1);
                   });
                   onSelectAction({ step: selectedAction.step, index: selectedAction.index - 1 });
                 }}
               >◀</button>
               <button
-                disabled={selectedAction.index >= (doc.steps[selectedAction.step]?.actions.length ?? 0) - 1}
+                disabled={!canSwapStepAction(doc.steps[selectedAction.step], selectedAction.index, 1)}
                 onClick={() => {
                   onMutate((draft) => {
-                    const actions = draft.steps[selectedAction.step].actions;
-                    [actions[selectedAction.index + 1], actions[selectedAction.index]] = [actions[selectedAction.index], actions[selectedAction.index + 1]];
+                    swapStepAction(draft.steps[selectedAction.step], selectedAction.index, 1);
                   });
                   onSelectAction({ step: selectedAction.step, index: selectedAction.index + 1 });
                 }}
@@ -239,7 +564,10 @@ export function Story({ doc, selectedAction, selectedEntity, warnings, onSelectA
               <button
                 className="mse-danger"
                 onClick={() => {
-                  onMutate((draft) => draft.steps[selectedAction.step].actions.splice(selectedAction.index, 1));
+                  onMutate((draft) => {
+                    removeStepAction(draft.steps[selectedAction.step], selectedAction.index);
+                    reconcileVoicePairing(draft);
+                  });
                   onSelectAction(null);
                 }}
               >Remove beat</button>
@@ -255,4 +583,217 @@ export function Story({ doc, selectedAction, selectedEntity, warnings, onSelectA
       )}
     </div>
   );
+}
+
+interface TimedMenu { step: number; phase?: number; segment?: number; left: number; top: number; }
+
+function TimedStepCard({ doc, step, stepIndex, selectedAction, selectedEntity, beatEntries, menu, conditionals, setMenu, onSelectAction, onAddAction, onMutate }: {
+  doc: SceneDoc;
+  step: SceneStep;
+  stepIndex: number;
+  selectedAction: { step: number; index: number } | null;
+  selectedEntity: SceneEntity | null;
+  beatEntries: VocabularyEntry[];
+  menu: TimedMenu | null;
+  conditionals: readonly ConditionalMeta[];
+  setMenu(next: TimedMenu | null): void;
+  onSelectAction(next: { step: number; index: number } | null): void;
+  onAddAction(stepIndex: number, verb: string, timedAt?: { phase: number; segment: number }): void;
+  onMutate(change: (draft: SceneDoc) => void): void;
+}) {
+  const timed = step.timed!;
+  const controllers = doc.entities.filter((entity): entity is TimingEntity => entity.kind === "timing");
+  const controller = controllers.find((entity) => entity.id === timed.controller) ?? null;
+  const declaredNames = controller?.phases.map((phase) => phase.name) ?? [];
+  const total = controller?.phases.reduce((sum, phase) => sum + phase.duration, 0) ?? 0;
+  let actionCursor = 0;
+
+  return <div className="mse-step mse-timed-step">
+    <div className="mse-step-head">
+      <div className="mse-timed-title"><strong>◷ Timed phases</strong><small>{total ? `${Number(total.toFixed(2))}s native clock` : "missing controller"}</small></div>
+      <StepConditionalBadges stepIndex={stepIndex} conditionals={conditionals} />
+      <div className="mse-step-tools">
+        <button disabled={stepIndex === 0} title="Move composition earlier" onClick={() => onMutate((draft) => { const steps = draft.steps; [steps[stepIndex - 1], steps[stepIndex]] = [steps[stepIndex], steps[stepIndex - 1]]; })}>◀</button>
+        <button disabled={stepIndex >= doc.steps.length - 1} title="Move composition later" onClick={() => onMutate((draft) => { const steps = draft.steps; [steps[stepIndex + 1], steps[stepIndex]] = [steps[stepIndex], steps[stepIndex + 1]]; })}>▶</button>
+        <button title="Remove timed composition" onClick={() => { onSelectAction(null); onMutate((draft) => { draft.steps.splice(stepIndex, 1); reconcileVoicePairing(draft); }); }}>×</button>
+      </div>
+    </div>
+    <label className="mse-timed-controller">
+      <span>Timing controller</span>
+      <select value={timed.controller} onChange={(event) => onMutate((draft) => {
+        const target = draft.entities.find((entity): entity is TimingEntity => entity.kind === "timing" && entity.id === event.target.value);
+        const targetStep = draft.steps[stepIndex];
+        if (!target || !targetStep.timed) return;
+        const prior = targetStep.timed.phases;
+        targetStep.timed.controller = target.id;
+        targetStep.name = `Timed · ${target.id}`;
+        targetStep.timed.phases = target.phases.map((phase, index) => ({
+          name: phase.name,
+          segments: prior[index]?.segments ?? [{ mode: "sequence", gap: .15, wrapped: false, items: [] }],
+        }));
+      })}>
+        {controllers.map((entity) => <option value={entity.id} key={entity.id}>{entity.id}</option>)}
+      </select>
+    </label>
+    <small className="mse-timed-hint">The controller defines absolute offsets. These cards edit what happens inside each phase; Preview runs the native clock and padding.</small>
+    {!controller && <div className="mse-timed-warning">The linked Timing controller no longer exists. Reconnect it before editing.</div>}
+    <div className="mse-timed-phases">
+      {timed.phases.map((phase, phaseIndex) => {
+        const declared = controller?.phases.find((candidate) => candidate.name.toLowerCase() === phase.name.toLowerCase()) ?? null;
+        const usage = timedPhaseUsage(step, phaseIndex, doc);
+        const overrun = declared && !usage.sourceOwned && usage.seconds > declared.duration + .001;
+        const usedNames = new Set(timed.phases.filter((_one, index) => index !== phaseIndex).map((one) => one.name));
+        return <section className={`mse-timed-phase${overrun ? " warning" : ""}`} key={`${phase.name}-${phaseIndex}`}>
+          <div className="mse-timed-phase-head">
+            <label><span>During</span><select value={phase.name} onChange={(event) => onMutate((draft) => { if (draft.steps[stepIndex].timed) draft.steps[stepIndex].timed!.phases[phaseIndex].name = event.target.value; })}>
+              {[...new Set([phase.name, ...declaredNames.filter((name) => !usedNames.has(name))])].map((name) => <option key={name}>{name}</option>)}
+            </select></label>
+            <span className="mse-timed-budget">{usage.sourceOwned ? `${Number(usage.seconds.toFixed(2))}s+ known` : `${Number(usage.seconds.toFixed(2))} / ${declared?.duration ?? "?"}s`}</span>
+            <button title="Remove phase from this composition" onClick={() => { onSelectAction(null); onMutate((draft) => { draft.steps[stepIndex].timed?.phases.splice(phaseIndex, 1); reconcileVoicePairing(draft); }); }}>×</button>
+          </div>
+          {overrun && <small className="mse-timed-warning">Known Canvas beats overrun this native phase. Shorten them or increase {phase.name} in the Timing inspector.</small>}
+          {usage.sourceOwned && <small className="mse-timed-source-note">Source-owned statements are preserved; Preview/check determines their exact duration.</small>}
+          {phase.segments.map((segment, segmentIndex) => {
+            const rendered = segment.items.map((item) => item.kind === "action" ? { item, actionIndex: actionCursor++ } : { item, actionIndex: -1 });
+            const activeMenu = menu?.step === stepIndex && menu.phase === phaseIndex && menu.segment === segmentIndex;
+            return <div className="mse-timed-segment" key={segmentIndex}>
+              <div className="mse-timed-segment-head">
+                <select aria-label={`${phase.name} composition`} value={segment.mode} onChange={(event) => onMutate((draft) => {
+                  const next = draft.steps[stepIndex].timed?.phases[phaseIndex].segments[segmentIndex];
+                  if (!next) return;
+                  next.mode = event.target.value as StepMode;
+                  if (next.mode !== "sequence") next.wrapped = true;
+                })}>
+                  <option value="sequence">one after another</option>
+                  <option value="together">together</option>
+                  <option value="stagger">staggered</option>
+                </select>
+                {segment.mode === "stagger" && <input aria-label={`${phase.name} stagger gap seconds`} type="number" min={.05} step={.05} value={segment.gap} onChange={(event) => onMutate((draft) => { const next = draft.steps[stepIndex].timed?.phases[phaseIndex].segments[segmentIndex]; if (next) next.gap = Math.max(.05, Number(event.target.value) || .15); })} />}
+                <button title="Remove composition group" onClick={() => { onSelectAction(null); onMutate((draft) => { draft.steps[stepIndex].timed?.phases[phaseIndex].segments.splice(segmentIndex, 1); reconcileVoicePairing(draft); }); }}>×</button>
+              </div>
+              <div className="mse-step-actions">
+                {rendered.map(({ item, actionIndex }, itemIndex) => item.kind === "action" ? <button
+                  key={itemIndex}
+                  className={`mse-action-chip${selectedAction?.step === stepIndex && selectedAction.index === actionIndex ? " active" : ""}`}
+                  onClick={() => onSelectAction(selectedAction?.step === stepIndex && selectedAction.index === actionIndex ? null : { step: stepIndex, index: actionIndex })}
+                ><strong>{verbDef(item.action.verb)?.label.toLowerCase() ?? item.action.verb}</strong>{actionTargetLabel(item.action) && <span>{actionTargetLabel(item.action)}</span>}<small>{(verbDef(item.action.verb)?.beatDur(item.action, doc.entities.find((entity) => entity.id === item.action.target) ?? null, doc) ?? item.action.dur).toFixed(2).replace(/\.00$/u, "")}s</small></button>
+                  : <span className="mse-source-chip" key={itemIndex} title={item.raw}><strong>Source</strong><code>{compactSource(item.raw)}</code></span>)}
+                <div className="mse-add-action">
+                  <button onClick={(event) => {
+                    if (activeMenu) { setMenu(null); return; }
+                    const rect = event.currentTarget.getBoundingClientRect(), height = 440;
+                    setMenu({ step: stepIndex, phase: phaseIndex, segment: segmentIndex, left: Math.max(8, Math.min(rect.left, window.innerWidth - 438)), top: Math.max(8, rect.top >= height + 8 ? rect.top - height - 6 : Math.min(window.innerHeight - height - 8, rect.bottom + 6)) });
+                  }}>+ Beat</button>
+                  {activeMenu && <VocabularyBrowser
+                    title="Add a phase beat"
+                    eyebrow={`DURING · ${phase.name}`}
+                    hint={selectedEntity ? `Compatible actions for ${selectedEntity.id} appear first.` : "Select an entity for targeted actions; scene actions remain available."}
+                    entries={beatEntries}
+                    availability={(entry) => vocabularyAvailability(entry, doc, selectedEntity?.id ?? "")}
+                    onChoose={(entry) => { setMenu(null); onAddAction(stepIndex, entry.name, { phase: phaseIndex, segment: segmentIndex }); }}
+                    onClose={() => setMenu(null)}
+                    variant="popover"
+                    style={{ left: menu.left, top: menu.top }}
+                    placeholder="Search phase animation…"
+                  />}
+                </div>
+              </div>
+            </div>;
+          })}
+          <button className="mse-mini-action" onClick={() => onMutate((draft) => { draft.steps[stepIndex].timed?.phases[phaseIndex].segments.push({ mode: "together", gap: .15, wrapped: true, items: [] }); })}>+ Composition group</button>
+        </section>;
+      })}
+    </div>
+    <button className="mse-mini-action" disabled={!declaredNames.some((name) => !new Set(timed.phases.map((phase) => phase.name)).has(name))} onClick={() => onMutate((draft) => {
+      const targetStep = draft.steps[stepIndex], targetController = draft.entities.find((entity): entity is TimingEntity => entity.kind === "timing" && entity.id === targetStep.timed?.controller);
+      const name = targetController?.phases.find((phase) => !targetStep.timed?.phases.some((used) => used.name === phase.name))?.name;
+      if (name && targetStep.timed) targetStep.timed.phases.push({ name, segments: [{ mode: "sequence", gap: .15, wrapped: false, items: [] }] });
+    })}>+ Phase</button>
+  </div>;
+}
+
+function compactSource(raw: string): string {
+  const one = raw.replaceAll(/\s+/gu, " ").trim();
+  return one.length > 52 ? `${one.slice(0, 49)}…` : one;
+}
+
+const GTTS_VOICES = ["en", "hi", "es", "fr", "de", "it", "pt", "ja", "ko", "zh"] as const;
+const CARTESIA_VOICES = ["katie", "skylar", "jameson", "gemma", "archie"] as const;
+const ELEVENLABS_VOICES = ["roger", "alice", "sarah", "jessica", "adam", "george", "liam", "rachel", "bella", "max", "vanessa", "alex", "paige"] as const;
+const VOICE_LANGUAGES = ["en", "hi", "es", "fr", "de", "it", "pt", "zh", "ja", "ko", "ar", "bn", "ta", "te"] as const;
+
+function VoiceControls({ doc, onMutate }: { doc: SceneDoc; onMutate(change: (draft: SceneDoc) => void): void }) {
+  const voice = doc.voice ?? { service: "gtts" as VoiceService, voice: null, tone: null, language: null };
+  const presets = voice.service === "gtts" ? GTTS_VOICES : voice.service === "cartesia" ? CARTESIA_VOICES : ELEVENLABS_VOICES;
+  const update = (change: (next: NonNullable<SceneDoc["voice"]>) => void) => onMutate((draft) => {
+    draft.voice ??= { service: "gtts", voice: null, tone: null, language: null };
+    change(draft.voice);
+  });
+  const currentVoiceIsCustom = Boolean(voice.voice && !presets.includes(voice.voice as never));
+  const currentLanguageIsCustom = Boolean(voice.language && !VOICE_LANGUAGES.includes(voice.language as never));
+  const tones: VoiceTone[] = voice.service === "gtts" ? ["normal", "slow"] : ["normal", "slow", "fast"];
+
+  return <fieldset className="mse-voice-controls">
+    <legend>Scene voice</legend>
+    <small>One global voice configuration is shared by every Speak beat.</small>
+    <label>
+      <span>Provider</span>
+      <select value={voice.service} onChange={(event) => update((next) => {
+        next.service = event.target.value as VoiceService;
+        next.voice = null;
+        next.tone = null;
+        next.language = null;
+      })}>
+        <option value="gtts">gTTS</option>
+        <option value="cartesia">Cartesia</option>
+        <option value="elevenlabs">ElevenLabs</option>
+      </select>
+    </label>
+    <label>
+      <span>{voice.service === "gtts" ? "Language / voice" : "Voice"}</span>
+      <select value={voice.voice ?? ""} onChange={(event) => update((next) => { next.voice = event.target.value || null; })}>
+        <option value="">Provider default</option>
+        {currentVoiceIsCustom && <option value={voice.voice!}>{voice.voice} — source value</option>}
+        {presets.map((preset) => <option key={preset} value={preset}>{preset}</option>)}
+      </select>
+    </label>
+    <label>
+      <span>Tone / pace</span>
+      <select value={voice.tone ?? ""} onChange={(event) => update((next) => { next.tone = (event.target.value || null) as VoiceTone | null; })}>
+        <option value="">Provider default</option>
+        {tones.map((tone) => <option key={tone} value={tone}>{tone}</option>)}
+      </select>
+    </label>
+    <label>
+      <span>Language override</span>
+      <select value={voice.language ?? ""} onChange={(event) => update((next) => { next.language = event.target.value || null; })}>
+        <option value="">Voice default</option>
+        {currentLanguageIsCustom && <option value={voice.language!}>{voice.language} — source value</option>}
+        {VOICE_LANGUAGES.map((language) => <option key={language} value={language}>{language}</option>)}
+      </select>
+    </label>
+  </fieldset>;
+}
+
+function StepConditionalBadges({ stepIndex, conditionals }: { stepIndex: number; conditionals: readonly ConditionalMeta[] }) {
+  const branches = conditionals.flatMap((conditional) => conditional.branches
+    .filter((branch) => branch.stepIndexes.includes(stepIndex))
+    .map((branch) => ({ conditional, branch })));
+  if (branches.length === 0) return null;
+  return (
+    <span className="mse-step-conditions" title="This Story card exists because these native Manic branches were selected.">
+      {branches.slice(0, 2).map(({ conditional, branch }) => (
+        <b key={`${conditional.id}:${branch.kind}`}>⑂ {branch.condition ?? "else"}{conditional.evaluations > 1 ? ` · ${branch.selected}/${conditional.evaluations}` : " ✓"}</b>
+      ))}
+      {branches.length > 2 && <b>+{branches.length - 2}</b>}
+    </span>
+  );
+}
+
+function lockedActionPreview(actions: SceneAction[]): SceneAction[] {
+  return actions.length <= 8 ? actions : [...actions.slice(0, 6), ...actions.slice(-2)];
+}
+
+function actionTargetLabel(action: SceneAction): string {
+  return [action.target, ...(action.ref ? [action.ref] : []), ...(action.refs ?? [])].filter(Boolean).join(" → ");
 }

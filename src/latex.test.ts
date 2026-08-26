@@ -1,9 +1,11 @@
 // equation + rewrite: LaTeX must survive raw — every backslash intact through
 // parse ⇄ serialize and surgical patching (backticks in source).
 
+import { existsSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseSceneBlock, patchSceneSource, readSceneSource, serializeScene } from "./codec.js";
-import { cloneDoc, createEntity } from "./model.js";
+import { canvasAnnotations, cloneDoc, createEntity } from "./model.js";
 import type { EquationEntity } from "./types.js";
 
 const LATEX = String.raw`S_{8} \;=\; \sum_{i=1}^{8} f(x_i^{*})\,\textcolor{cyan}{\Delta x}`;
@@ -59,5 +61,28 @@ describe("equation + rewrite (LaTeX)", () => {
     const read = parseSceneBlock(text);
     expect(read.status).toBe("ok");
     if (read.status === "ok") expect((read.doc.entities[0] as EquationEntity).latex).toBe("a ` b");
+  });
+
+  it("marks an equation with its editable rewrite chain", () => {
+    const source = "equation(q, (640, 300), `x^2`, 48);\nrewrite(q, `x^2+1`, 0.8);\nrewrite(q, `x^2+2`, 0.9);\n";
+    const read = readSceneSource(source);
+    expect(canvasAnnotations(read.doc.entities[0], read.doc)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "rewrite-chain", label: "2 authored rewrite states", representation: "semantic" }),
+    ]));
+  });
+});
+
+const QUADRATIC = resolve(import.meta.dirname, "../../../manic/examples/quadratic-formula-continuity.manic");
+
+describe.skipIf(!existsSync(QUADRATIC))("quadratic-formula-continuity.manic acceptance", () => {
+  it("projects every entity and beat without skips and preserves every byte", () => {
+    const source = readFileSync(QUADRATIC, "utf8");
+    const scene = readSceneSource(source);
+    expect(scene.skipped).toEqual([]);
+    expect(scene.doc.title).toBe("The Quadratic Formula by Completing the Square");
+    expect(scene.doc.entities).toHaveLength(4);
+    expect(scene.doc.steps).toHaveLength(23);
+    expect(scene.doc.steps.flatMap((step) => step.actions).filter((action) => action.verb === "rewrite")).toHaveLength(9);
+    expect(patchSceneSource(source, scene, cloneDoc(scene.doc))).toBe(source);
   });
 });

@@ -4,11 +4,18 @@
 import { argName, argNumber, argPoint, argString, escapeString, num, pt } from "../args.js";
 import { registerEntity } from "../registry.js";
 import { baseEntity } from "./base.js";
-import type { TextEntity } from "../types.js";
+import { CANVAS_SIZES, type CanvasSize, type SceneDoc, type TextEntity } from "../types.js";
 
-export function textBounds(entity: TextEntity): { x: number; y: number; width: number; height: number } {
-  const lines = layoutTextLines(entity);
-  const widest = Math.max(1, ...lines.map((line) => line.length));
+const GLYPH_ADVANCE = .62;
+const AUTO_WRAP_MARGIN = 40;
+const NARROWEST_AUTO_COLUMN = 220;
+
+function textLength(value: string): number { return [...value].length; }
+function canvasSize(doc?: SceneDoc): CanvasSize | null { return doc ? (doc.size ?? CANVAS_SIZES[doc.format]) : null; }
+
+export function textBounds(entity: TextEntity, doc?: SceneDoc): { x: number; y: number; width: number; height: number } {
+  const lines = layoutTextLines(entity, doc);
+  const widest = Math.max(1, ...lines.map(textLength));
   const glyph = entity.size * 0.62;
   const width = entity.vertical ? entity.size : widest * glyph;
   const height = entity.vertical
@@ -18,17 +25,36 @@ export function textBounds(entity: TextEntity): { x: number; y: number; width: n
   return { x, y: entity.y - height / 2, width, height };
 }
 
-/** Approximate the engine's layout: hand-broken lines plus wrap-to-column. */
-export function layoutTextLines(entity: TextEntity): string[] {
-  const hard = entity.text.split("\n");
-  if (entity.wrap === null) return hard;
-  const perLine = Math.max(3, Math.floor(entity.wrap / (entity.size * 0.62)));
+/** Engine-compatible source semantics with approximate Canvas font metrics:
+ * explicit wrap wins; otherwise long text folds to the room around its anchor. */
+export function textWrapWidth(entity: TextEntity, doc?: SceneDoc): number | null {
+  if (entity.wrap !== null) return Math.max(1, entity.wrap);
+  if (entity.vertical) return null;
+  const canvas = canvasSize(doc);
+  if (!canvas) return null;
+  const hard = entity.text.replaceAll("\\n", "\n").split("\n");
+  const natural = Math.max(0, ...hard.map((line) => textLength(line) * entity.size * GLYPH_ADVANCE));
+  const room = (entity.align === "center" ? 2 * Math.min(entity.x, canvas.width - entity.x)
+    : entity.align === "left" ? canvas.width - entity.x : entity.x) - AUTO_WRAP_MARGIN;
+  if (natural <= room || room <= 0) return null;
+  return Math.max(room, NARROWEST_AUTO_COLUMN);
+}
+
+/** Approximate native shaping: hard breaks, atomic inline math, and word wrap. */
+export function layoutTextLines(entity: TextEntity, doc?: SceneDoc): string[] {
+  const hard = entity.text.replaceAll("\\n", "\n").split("\n");
+  const width = textWrapWidth(entity, doc);
+  if (width === null) return hard;
+  const perLine = Math.max(3, Math.floor(width / (entity.size * GLYPH_ADVANCE)));
   const wrapped: string[] = [];
   for (const line of hard) {
     let current = "";
-    for (const word of line.split(/\s+/u).filter(Boolean)) {
+    // `$…$` stays one word even when the formula contains spaces, matching the
+    // native rich-text shaper's atomic inline-math spans.
+    const words = line.match(/\$[^$]*\$|\S+/gu) ?? [];
+    for (const word of words) {
       const candidate = current ? `${current} ${word}` : word;
-      if (candidate.length > perLine && current) {
+      if (textLength(candidate) > perLine && current) {
         wrapped.push(current);
         current = word;
       } else {
@@ -106,7 +132,7 @@ registerEntity<TextEntity>({
   },
   anchor: (entity) => ({ x: entity.x, y: entity.y }),
   translate(entity, dx, dy) { entity.x += dx; entity.y += dy; },
-  bounds: textBounds,
+  bounds: (entity, ctx) => textBounds(entity, ctx?.doc),
   handles: () => [],
   dragHandle() {},
   fields: [

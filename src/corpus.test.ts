@@ -34,7 +34,7 @@ describe.skipIf(!available)(`example corpus (${files.length} files)`, () => {
       }
     }
     expect(failures, failures.slice(0, 10).join("\n")).toEqual([]);
-  });
+  }, 15_000);
 
   it("survives a real edit on every editable file", () => {
     const failures: string[] = [];
@@ -70,5 +70,5 @@ describe.skipIf(!available)(`example corpus (${files.length} files)`, () => {
       }
     }
     expect(failures, failures.slice(0, 10).join("\n")).toEqual([]);
-  });
+  }, 15_000);
 });

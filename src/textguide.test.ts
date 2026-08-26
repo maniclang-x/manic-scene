@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { parseSceneBlock, serializeScene } from "./codec.js";
 import { compileScene } from "./timeline.js";
 import { createAction, createEntity } from "./model.js";
+import { layoutTextLines, textBounds, textWrapWidth } from "./entities/text.js";
 import type { CaptionEntity, SceneDoc, TextEntity } from "./types.js";
 
 describe("text-guide vocabulary", () => {
@@ -111,5 +112,41 @@ describe("text-guide vocabulary", () => {
     expect(read.status).toBe("ok");
     if (read.status !== "ok") return;
     expect(read.doc.steps[0].actions.map((action) => action.ease)).toEqual(["overshoot", "smooth"]);
+  });
+
+  it("matches native explicit and edge-aware automatic wrapping semantics", () => {
+    const text = createEntity("text", "copy", 200, 300) as TextEntity;
+    text.size = 20;
+    text.text = "A long sentence near the canvas edge must fold into readable lines instead of leaving the frame";
+    const doc: SceneDoc = { format: "16:9", template: "black", entities: [text], steps: [] };
+    // Native: centered room = 2 * nearer edge - 40px margin.
+    expect(textWrapWidth(text, doc)).toBe(360);
+    expect(layoutTextLines(text, doc).length).toBeGreaterThan(1);
+    expect(textBounds(text, doc).width).toBeLessThanOrEqual(360);
+
+    text.wrap = 250;
+    text.text = "Keep the inline formula $x + y = z$ atomic while the surrounding explanation wraps";
+    expect(textWrapWidth(text, doc)).toBe(250);
+    const lines = layoutTextLines(text, doc);
+    expect(lines.join(" | ")).toContain("$x + y = z$");
+    expect(lines.filter((line) => line.includes("$x + y = z$")).length).toBe(1);
+  });
+
+  it("lays out a selected say destination with the target text wrapping contract", () => {
+    const block = [
+      "// BEGIN WORKBENCH CANVAS",
+      'text(caption, (640, 660), "");',
+      "size(caption, 24);",
+      "wrap(caption, 420);",
+      'say(caption, "This destination is long enough to wrap before native Preview crossfades it", 0.4);',
+      "// END WORKBENCH CANVAS",
+    ].join("\n");
+    const read = parseSceneBlock(block);
+    expect(read.status).toBe("ok");
+    if (read.status !== "ok") return;
+    const target = read.doc.entities[0] as TextEntity;
+    const action = read.doc.steps[0].actions[0];
+    expect(action).toMatchObject({ verb: "say", target: "caption" });
+    expect(layoutTextLines({ ...target, text: action.text ?? "" }, read.doc).length).toBeGreaterThan(1);
   });
 });

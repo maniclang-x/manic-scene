@@ -54,14 +54,14 @@ describe("scene codec", () => {
   it("reports unsupported vocabulary instead of destroying it", () => {
     const block = [
       "// BEGIN WORKBENCH CANVAS",
-      "cloud(field, 600) { let x = i; let y = i; }",
+      "nebula(field, 600) { let x = i; let y = i; }",
       "circle(a, (100, 100), 40);",
       "color(a, cyan);",
       "// END WORKBENCH CANVAS",
     ].join("\n");
     const read = parseSceneBlock(block);
     expect(read.status).toBe("unsupported");
-    if (read.status === "unsupported") expect(read.reasons.join(" ")).toContain("cloud");
+    if (read.status === "unsupported") expect(read.reasons.join(" ")).toContain("nebula");
   });
 
   it("reads hand-written steps, bare blocks, and top-level verbs", () => {

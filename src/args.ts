@@ -24,6 +24,11 @@ export function argPoint(args: Arg[], index: number): { x: number; y: number } |
   return arg && arg.type === "point" ? { x: arg.x, y: arg.y } : null;
 }
 
+export function argPoint3(args: Arg[], index: number): { x: number; y: number; z: number } | null {
+  const arg = args[index];
+  return arg && arg.type === "point3" ? { x: arg.x, y: arg.y, z: arg.z } : null;
+}
+
 const EASE_ALIASES: Record<string, EaseName> = { inout: "smooth", back: "overshoot", spring: "elastic" };
 
 /** Canonical easing for an engine easing name, or null if it isn't one. */
@@ -40,6 +45,10 @@ export function num(value: number): string {
 
 export function pt(x: number, y: number): string {
   return `(${num(x)}, ${num(y)})`;
+}
+
+export function pt3(x: number, y: number, z: number): string {
+  return `(${num(x)}, ${num(y)}, ${num(z)})`;
 }
 
 /** LaTeX belongs in backticks (raw — every backslash survives); fall back to a

@@ -4,7 +4,7 @@
 // properties, steps play in order — so what the editor plays is an honest
 // approximation of what the engine renders.
 
-import { entityAnchor } from "./model.js";
+import { entityAnchor, stepActions } from "./model.js";
 import { verbDef, wordCount, type BaseProp, type VerbApplyCtx, type WordFx } from "./registry.js";
 import type { EaseName, SceneDoc, SceneEntity } from "./types.js";
 
@@ -43,7 +43,7 @@ export interface CompiledScene {
 }
 
 interface Keyframe { t: number; v: number; ease: EaseName | "hold"; }
-interface FlashWindow { start: number; end: number; color: string; }
+interface FlashWindow { start: number; end: number; color: string; ease: EaseName; }
 
 interface EntityTracks {
   entity: SceneEntity;
@@ -57,7 +57,7 @@ export function compileScene(doc: SceneDoc): CompiledScene {
   const tracks = new Map<string, EntityTracks>();
   const typed = new Set<string>();
   for (const step of doc.steps) {
-    for (const action of step.actions) if (action.verb === "type") typed.add(action.target);
+    for (const action of stepActions(step)) if (action.verb === "type") typed.add(action.target);
   }
   for (const entity of doc.entities) {
     const anchor = entityAnchor(entity);
@@ -81,20 +81,53 @@ export function compileScene(doc: SceneDoc): CompiledScene {
   const steps: StepWindow[] = [];
   let cursor = 0;
   for (const step of doc.steps) {
+    if (step.timed) {
+      const controller = doc.entities.find((entity): entity is Extract<SceneEntity, { kind: "timing" }> => entity.id === step.timed!.controller && entity.kind === "timing");
+      if (!controller) continue;
+      let phaseOffset = 0;
+      for (const declared of controller.phases) {
+        const phase = step.timed.phases.find((candidate) => candidate.name.toLowerCase() === declared.name.toLowerCase());
+        let segmentOffset = 0;
+        for (const segment of phase?.segments ?? []) {
+          let actionOffset = 0, segmentEnd = 0;
+          const actions = segment.items.flatMap((item) => item.kind === "action" ? [item.action] : []);
+          for (const action of actions) {
+            const verb = verbDef(action.verb);
+            if (!verb) continue;
+            const actionTargets = resolveActionTracks(tracks, action.target);
+            const track = actionTargets[0];
+            const beat = Math.max(.01, verb.beatDur(action, track?.entity ?? null, doc));
+            const start = cursor + phaseOffset + segmentOffset + actionOffset;
+            const end = start + beat;
+            segmentEnd = Math.max(segmentEnd, actionOffset + beat);
+            if (segment.mode === "sequence") actionOffset += beat;
+            else if (segment.mode === "stagger") actionOffset += Math.max(0, segment.gap);
+            for (const target of actionTargets) verb.apply(applyCtx(target), action, start, end);
+          }
+          segmentOffset += segmentEnd;
+        }
+        phaseOffset += declared.duration;
+      }
+      const end = cursor + phaseOffset;
+      steps.push({ name: step.name, start: cursor, end });
+      cursor = end;
+      continue;
+    }
     if (step.actions.length === 0) continue;
     let offset = 0;
     let stepEnd = cursor;
     for (const action of step.actions) {
       const verb = verbDef(action.verb);
       if (!verb) continue;
-      const track = action.target ? tracks.get(action.target) : undefined;
-      const beat = Math.max(0.01, verb.beatDur(action, track?.entity ?? null));
+      const actionTargets = resolveActionTracks(tracks, action.target);
+      const track = actionTargets[0];
+      const beat = Math.max(0.01, verb.beatDur(action, track?.entity ?? null, doc));
       const start = cursor + offset;
       const end = start + beat;
       stepEnd = Math.max(stepEnd, end);
       if (step.mode === "sequence") offset += beat;
       else if (step.mode === "stagger") offset += Math.max(0, step.gap);
-      if (track) verb.apply(applyCtx(track), action, start, end);
+      for (const target of actionTargets) verb.apply(applyCtx(target), action, start, end);
     }
     steps.push({ name: step.name, start: cursor, end: stepEnd });
     cursor = stepEnd;
@@ -123,7 +156,7 @@ export function compileScene(doc: SceneDoc): CompiledScene {
           draw: valueAt(track.props.draw, time),
           type: valueAt(track.props.type, time),
           flash: flash
-            ? { color: flash.color, amount: triangle((time - flash.start) / Math.max(0.01, flash.end - flash.start)) }
+            ? { color: flash.color, amount: flashAmount(flash, time) }
             : null,
           aux,
           words: wordsFrame(track, time),
@@ -132,6 +165,13 @@ export function compileScene(doc: SceneDoc): CompiledScene {
       return frame;
     },
   };
+}
+
+function resolveActionTracks(tracks: Map<string, EntityTracks>, target: string): EntityTracks[] {
+  if (!target) return [];
+  const exact = tracks.get(target);
+  if (exact) return [exact];
+  return [...tracks.values()].filter((track) => track.entity.tags?.includes(target));
 }
 
 function applyCtx(track: EntityTracks): VerbApplyCtx {
@@ -152,7 +192,7 @@ function applyCtx(track: EntityTracks): VerbApplyCtx {
       list.push({ t: start, v: valueAt(list, start), ease: "hold" });
       list.push({ t: end, v: target, ease });
     },
-    flash(start, end, color) { track.flashes.push({ start, end, color }); },
+    flash(start, end, color, ease) { track.flashes.push({ start, end, color, ease }); },
     wordFx(fx) { track.wordfx.push(fx); },
   };
 }
@@ -196,9 +236,11 @@ function valueAt(list: Keyframe[], time: number): number {
   return previous.v + (next.v - previous.v) * applyEase(next.ease, u);
 }
 
-function triangle(u: number): number {
-  const clamped = clamp01(u);
-  return clamped < 0.5 ? clamped * 2 : 2 - clamped * 2;
+function flashAmount(window: FlashWindow, time: number): number {
+  const u = clamp01((time - window.start) / Math.max(0.01, window.end - window.start));
+  if (u < 0.25) return applyEase(window.ease, u / 0.25);
+  if (u <= 0.75) return 1;
+  return 1 - applyEase(window.ease, (u - 0.75) / 0.25);
 }
 
 function clamp01(value: number): number {

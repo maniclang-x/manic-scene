@@ -12,6 +12,7 @@ export type Arg =
   | { type: "string"; value: string }
   | { type: "name"; value: string }
   | { type: "point"; x: number; y: number }
+  | { type: "point3"; x: number; y: number; z: number }
   | { type: "expr"; node: ExprNode; src: string };
 
 interface StatementBase {
@@ -26,6 +27,8 @@ export interface CallStatement extends StatementBase {
   name: string;
   args: Arg[];
   block: Statement[] | null;
+  /** Optional generative home provider in `cloud(...) from text(...) { ... }`. */
+  source?: { name: string; args: Arg[]; raw: string } | null;
 }
 
 export interface LetStatement extends StatementBase {
@@ -44,7 +47,7 @@ export interface ForStatement extends StatementBase {
 
 export interface IfStatement extends StatementBase {
   kind: "if";
-  branches: { cond: ExprNode; body: Statement[] }[];
+  branches: { cond: ExprNode; condSrc: string; condStart: number; condEnd: number; body: Statement[] }[];
   elseBody: Statement[] | null;
 }
 
@@ -152,7 +155,7 @@ function readFor(reader: Reader, unsupported: string[]): ForStatement {
 
 function readIf(reader: Reader, unsupported: string[]): IfStatement {
   const start = reader.tokens[reader.index];
-  const branches: { cond: ExprNode; body: Statement[] }[] = [];
+  const branches: IfStatement["branches"] = [];
   let elseBody: Statement[] | null = null;
   let end = start.end;
   reader.index += 1; // `if`
@@ -160,7 +163,16 @@ function readIf(reader: Reader, unsupported: string[]): IfStatement {
     const condTokens = takeUntil(reader, (token) => token.kind === "punct" && token.text === "{");
     const body = readBlock(reader, unsupported);
     end = reader.tokens[reader.index - 1].end;
-    branches.push({ cond: parseExpr(condTokens), body });
+    if (condTokens.length === 0) fail();
+    const condStart = condTokens[0].start;
+    const condEnd = condTokens[condTokens.length - 1].end;
+    branches.push({
+      cond: parseExpr(condTokens),
+      condSrc: reader.source.slice(condStart, condEnd),
+      condStart,
+      condEnd,
+      body,
+    });
     const next = reader.tokens[reader.index];
     if (!next || next.kind !== "name" || next.text !== "else") break;
     reader.index += 1; // `else`
@@ -215,16 +227,30 @@ function readCall(reader: Reader, unsupported: string[]): CallStatement {
     readCallArgs(reader, args);
     next = reader.tokens[reader.index];
   }
+  let source: CallStatement["source"] = null;
+  if (next && next.kind === "name" && next.text === "from") {
+    reader.index += 1;
+    const provider = reader.tokens[reader.index];
+    if (!provider || provider.kind !== "name") fail();
+    reader.index += 1;
+    const sourceStart = provider.start;
+    const sourceArgs: Arg[] = [];
+    expect(reader, "punct", "(");
+    readCallArgs(reader, sourceArgs);
+    const sourceEnd = reader.tokens[reader.index - 1]?.end ?? provider.end;
+    source = { name: provider.text, args: sourceArgs, raw: reader.source.slice(sourceStart, sourceEnd) };
+    next = reader.tokens[reader.index];
+  }
   if (next && next.kind === "punct" && next.text === "{") {
     const block = readStatements((reader.index += 1, reader), unsupported, true);
     const close = reader.tokens[reader.index];
     if (!close || close.text !== "}") fail();
     reader.index += 1;
-    return { kind: "call", name: start.text, args, block, raw: slice(reader, start.start, close.end), start: start.start, end: close.end };
+    return { kind: "call", name: start.text, args, block, ...(source ? { source } : {}), raw: slice(reader, start.start, close.end), start: start.start, end: close.end };
   }
   if (next && next.kind === "punct" && next.text === ";") {
     reader.index += 1;
-    return { kind: "call", name: start.text, args, block: null, raw: slice(reader, start.start, next.end), start: start.start, end: next.end };
+    return { kind: "call", name: start.text, args, block: null, ...(source ? { source } : {}), raw: slice(reader, start.start, next.end), start: start.start, end: next.end };
   }
   return fail();
 }

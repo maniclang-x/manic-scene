@@ -26,6 +26,18 @@ function act(verb: string, target: string, over: Partial<SceneAction> = {}): Sce
   return { ...createAction(verb, target), ...over };
 }
 
+const QUADRATIC_STATES = [
+  String.raw`x^2+\frac{\textcolor{cyan}{b}}{\textcolor{orange}{a}}x+\frac{\textcolor{lime}{c}}{\textcolor{orange}{a}}=0`,
+  String.raw`x^2+\frac{\textcolor{cyan}{b}}{\textcolor{orange}{a}}x=-\frac{\textcolor{lime}{c}}{\textcolor{orange}{a}}`,
+  String.raw`x^2+\frac{\textcolor{cyan}{b}}{2\textcolor{orange}{a}}x+\frac{\textcolor{cyan}{b}}{2\textcolor{orange}{a}}x=-\frac{\textcolor{lime}{c}}{\textcolor{orange}{a}}`,
+  String.raw`x^2+\frac{\textcolor{cyan}{b}}{2\textcolor{orange}{a}}x+\frac{\textcolor{cyan}{b}}{2\textcolor{orange}{a}}x+\left(\frac{\textcolor{cyan}{b}}{2\textcolor{orange}{a}}\right)^2=\left(\frac{\textcolor{cyan}{b}}{2\textcolor{orange}{a}}\right)^2-\frac{\textcolor{lime}{c}}{\textcolor{orange}{a}}`,
+  String.raw`x^2+\frac{\textcolor{cyan}{b}}{2\textcolor{orange}{a}}x+\frac{\textcolor{cyan}{b}}{2\textcolor{orange}{a}}x+\left(\frac{\textcolor{cyan}{b}}{2\textcolor{orange}{a}}\right)^2=\frac{\textcolor{cyan}{b}^2-4\textcolor{orange}{a}\textcolor{lime}{c}}{4\textcolor{orange}{a}^2}`,
+  String.raw`x\left(x+\frac{\textcolor{cyan}{b}}{2\textcolor{orange}{a}}\right)+\frac{\textcolor{cyan}{b}}{2\textcolor{orange}{a}}\left(x+\frac{\textcolor{cyan}{b}}{2\textcolor{orange}{a}}\right)=\frac{\textcolor{cyan}{b}^2-4\textcolor{orange}{a}\textcolor{lime}{c}}{4\textcolor{orange}{a}^2}`,
+  String.raw`\left(x+\frac{\textcolor{cyan}{b}}{2\textcolor{orange}{a}}\right)^2=\frac{\textcolor{cyan}{b}^2-4\textcolor{orange}{a}\textcolor{lime}{c}}{4\textcolor{orange}{a}^2}`,
+  String.raw`x+\frac{\textcolor{cyan}{b}}{2\textcolor{orange}{a}}=\pm\frac{\sqrt{\textcolor{cyan}{b}^2-4\textcolor{orange}{a}\textcolor{lime}{c}}}{2\textcolor{orange}{a}}`,
+  String.raw`x=\frac{-\textcolor{cyan}{b}\pm\sqrt{\textcolor{cyan}{b}^2-4\textcolor{orange}{a}\textcolor{lime}{c}}}{2\textcolor{orange}{a}}`,
+] as const;
+
 export const STARTERS: SceneStarter[] = [
   {
     id: "concept",
@@ -202,6 +214,34 @@ export const STARTERS: SceneStarter[] = [
             act("pulse", "hero", { dur: 0.9 }),
           ],
         },
+      ],
+    },
+  },
+  {
+    id: "quadratic",
+    name: "Quadratic derivation",
+    description: "A continuous nine-state equation rewrite with reading beats.",
+    doc: {
+      title: "The Quadratic Formula by Completing the Square",
+      format: "16:9",
+      template: "plain",
+      entities: [
+        make("watermark", "manicMark", 1135, 30, { text: "Made With Manic", size: 20, responsive: false }),
+        make("text", "kicker", 640, 72, { text: "COMPLETING THE SQUARE · ONE CONTINUOUS EQUATION", size: 18, color: "dim", bold: true, reveal: "fade" }),
+        make("text", "guide", 640, 620, { text: "Stable symbols stay. Only the mathematical change moves.", size: 19, color: "dim", reveal: "fade" }),
+        make("equation", "work", 640, 330, { latex: String.raw`\textcolor{orange}{a}x^2+\textcolor{cyan}{b}x+\textcolor{lime}{c}=0`, size: 48, reveal: "fade" }),
+      ],
+      steps: [
+        { name: "Reveal heading", mode: "together", gap: .15, actions: [act("show", "kicker", { dur: .45 })] },
+        { name: "Reveal guide", mode: "together", gap: .15, actions: [act("show", "guide", { dur: .45 })] },
+        { name: "Reveal equation", mode: "together", gap: .15, actions: [act("show", "work", { dur: .65 })] },
+        { name: "Read setup", mode: "together", gap: .15, actions: [act("wait", "", { dur: 1.2 })] },
+        ...QUADRATIC_STATES.flatMap((latex, index) => [
+          { name: `Rewrite ${index + 1}`, mode: "together" as const, gap: .15, actions: [act("rewrite", "work", { text: latex, dur: [1, .95, 1.05, 1.1, 1, 1.05, .95, 1.05, 1.1][index] })] },
+          ...(index < QUADRATIC_STATES.length - 1 ? [{ name: `Read state ${index + 1}`, mode: "together" as const, gap: .15, actions: [act("wait", "", { dur: [1, .95, .95, 1.05, 1, .9, 1, 1.1][index] })] }] : []),
+        ]),
+        { name: "Emphasize result", mode: "together", gap: .15, actions: [act("pulse", "work", { dur: .65 })] },
+        { name: "Hold result", mode: "together", gap: .15, actions: [act("wait", "", { dur: 2.5 })] },
       ],
     },
   },

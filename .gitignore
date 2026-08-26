@@ -1,3 +1,6 @@
+ROADMAP-UX.md
 GUIDE.md
 node_modules/
 dist/
+/.manic/sfx-cache/
+/.manic/voice-cache/

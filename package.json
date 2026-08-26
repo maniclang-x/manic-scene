@@ -2,6 +2,25 @@
   "name": "@maniclang/scene",
   "version": "0.1.0",
   "description": "Shared foundation for Manic visual editors: scene document, manic source codec, deterministic timeline, and the React scene editor. Used by Manic Workbench and Manic Web.",
+  "author": "Anish Nath",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/maniclang-x/manic-scene.git"
+  },
+  "bugs": {
+    "url": "https://github.com/maniclang-x/manic-scene/issues"
+  },
+  "homepage": "https://github.com/maniclang-x/manic-scene#readme",
+  "keywords": [
+    "manic",
+    "animation",
+    "canvas",
+    "scene-editor",
+    "visual-editor",
+    "typescript",
+    "react"
+  ],
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -18,7 +37,8 @@
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json && cp src/react/editor.css dist/react/editor.css",

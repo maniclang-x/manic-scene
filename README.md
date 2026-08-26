@@ -1,8 +1,24 @@
 # @maniclang/scene
 
-The framework-agnostic foundation for **Manic visual editors** — used by Manic
-Workbench today and intended for Manic Web (`platform/web`) next. No React, no
-DOM: just the scene document and the code that keeps it honest.
+The shared foundation for [Manic](https://maniclang.com) visual editors. It is
+used by [Manic Workbench](https://github.com/maniclang-x/manic-workbench) and is
+designed for the [Manic web application](https://app.maniclang.com). The core
+scene model and codec are framework-agnostic; the optional React entry point
+provides the complete visual editor.
+
+## Install
+
+```sh
+npm install @maniclang/scene
+```
+
+Install React when using `@maniclang/scene/react`:
+
+```sh
+npm install @maniclang/scene react react-dom
+```
+
+Package: [npmjs.com/package/@maniclang/scene](https://www.npmjs.com/package/@maniclang/scene)
 
 ## What it provides
 
@@ -17,7 +33,7 @@ DOM: just the scene document and the code that keeps it honest.
 | `script` | The low-level statement reader for the manic literal-arg subset. |
 | `react` (`@maniclang/scene/react`) | The complete scene editor UI — design stage (drag/handles), compact command bar, searchable Add/Animate/Feature/Language browser, schema-driven inspector, story panel (together/seq/stagger), and LaTeX + color fields. React is an optional peer dependency; the core stays dependency-free. |
 
-## Host integration (Workbench today, Web next)
+## Host integration
 
 The editor authors the scene and generates Manic code — nothing else. The host
 owns files and the real engine:
@@ -36,7 +52,7 @@ import "katex/dist/katex.min.css"; // equation sketch + LaTeX field preview
   source={fileContent}                 // full .manic source
   onSourceChange={saveFile}            // surgical patches to the same file
   onOpenSource={() => showCodeEditor()}
-  onPreview={() => runManicBinary()}   // true preview via the configured manic engine
+  onPreview={() => runManicBinary()}   // native preview via the configured Manic engine
   assetProvider={assets}               // Library/Project media supplied by the host
 />
 ```
@@ -339,7 +355,53 @@ Preview remains authoritative for fitted type, countdown motion and reveal state
 ## Develop
 
 ```sh
-npm install
-npm test        # round-trips, expression engine, surgical patching, ~417-file corpus invariants
+npm ci
+npm test        # round-trips, expression engine, surgical patching, and corpus invariants
+npm run typecheck
 npm run build   # emits dist/ (consumed by workbench via file:../manic-scene)
 ```
+
+## Publish
+
+Maintainers with publish access to the `@maniclang` npm scope should release
+from a clean, reviewed commit. Synchronize the engine catalogue when the Manic
+engine vocabulary has changed, verify the package contents, and then publish:
+
+```sh
+npm ci
+npm run catalog:sync
+git diff --exit-code
+npm test
+npm run typecheck
+npm run build
+npm login
+npm whoami
+npm publish --dry-run --access public
+npm publish --access public
+```
+
+Published npm versions are immutable. Update the `version` in `package.json`
+before publishing a subsequent release.
+
+## Manic ecosystem
+
+- Product: [maniclang.com](https://maniclang.com)
+- Web application: [app.maniclang.com](https://app.maniclang.com)
+- Documentation: [docs.maniclang.com](https://docs.maniclang.com)
+- Manic engine and releases: [github.com/maniclang-x/manic](https://github.com/maniclang-x/manic)
+- Manic Workbench: [github.com/maniclang-x/manic-workbench](https://github.com/maniclang-x/manic-workbench)
+- Manic Create: [app.maniclang.com/create](https://app.maniclang.com/create)
+- Platform API contract: [npm package](https://www.npmjs.com/package/@maniclang/api-spec) · [source](https://github.com/maniclang-x/manic-api-spec)
+- MCP server: [npm package](https://www.npmjs.com/package/@maniclang/mcp-server) · [source](https://github.com/maniclang-x/manic-mcp-server)
+- Browser extension: [github.com/maniclang-x/manic-browser-extension](https://github.com/maniclang-x/manic-browser-extension)
+- Homebrew tap: [github.com/maniclang-x/homebrew-tap](https://github.com/maniclang-x/homebrew-tap)
+- Issues: [github.com/maniclang-x/manic-scene/issues](https://github.com/maniclang-x/manic-scene/issues)
+
+## License
+
+`@maniclang/scene` is available under the [MIT License](LICENSE).
+
+This license applies to this shared scene-editor package only. The compiled
+Manic engine, Manic-owned runtime assets, hosted services, and other Manic
+products remain governed by their own licenses and terms. Third-party software,
+fonts, icons, and artwork retain their respective licenses.

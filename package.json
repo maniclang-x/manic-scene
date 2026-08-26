@@ -22,6 +22,7 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json && cp src/react/editor.css dist/react/editor.css",
+    "catalog:sync": "node scripts/sync-catalog.mjs",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "prepare": "npm run build"
